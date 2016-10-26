@@ -1,0 +1,595 @@
+/*Tras la catástrofe acontecida y la destrucción del mundo conocido siempre hay un nuevo comienzo.... V_2.0*/
+
+SET ThousandSep='.';
+SET DecimalSep=',';
+SET MoneyThousandSep='.';
+SET MoneyDecimalSep=',';
+SET MoneyFormat='#.##0,00 €;-#.##0,00 €';
+SET TimeFormat='h:mm:ss';
+SET DateFormat='DD/MM/YYYY';
+SET TimestampFormat='DD/MM/YYYY h:mm:ss[.fff]';
+SET MonthNames='ene.;feb.;mar.;abr.;may.;jun.;jul.;ago.;sep.;oct.;nov.;dic.';
+SET DayNames='lu.;ma.;mi.;ju.;vi.;sá.;do.';
+SET LongMonthNames='enero;febrero;marzo;abril;mayo;junio;julio;agosto;septiembre;octubre;noviembre;diciembre';
+SET LongDayNames='lunes;martes;miércoles;jueves;viernes;sábado;domingo';
+SET FirstWeekDay=0;
+SET BrokenWeeks=0;
+SET ReferenceDay=4;
+SET FirstMonthOfYear=1;
+SET CollationLocale='es-ES';
+
+
+/*CONEXIONES SQL */
+ // LIB CONNECT TO [helpdesk (win-609osf5m1iu_administrador)];
+
+/*VARIABLES*/
+   //colores de los eventos:
+   set coloricosBonicos =  if ( EVENTO = 'EV_TICKET_CREAR', rgb(128,128,255) ,
+	if ( EVENTO = 'EV_TICKET_RESPONDER', rgb(0,129,255),
+    	if ( EVENTO = 'EV_QUEUELOG_PAUSE', rgb(100,100,0),
+        	if (EVENTO= 'EV_QUEUELOG_UNPAUSE', rgb(172,230,0) ,
+            	If(EVENTO = 'EV_QUEUELOG_CONNECT' , rgb(204,255,51),
+                	If(EVENTO = 'EV_TICKET_MOVER' , rgb(0,64,255) ,
+                    	If(EVENTO = 'EV_TICKET_LEER' , argb(50,0,153,255) ,
+                        	If(EVENTO = 'EV_QUEUELOG_RINGNOANSWER' , rgb(255,0,0) ,
+                            	If(EVENTO = 'EV_CDR_Dial' , rgb(255,255,0) ,
+                                	If(EVENTO = 'EV_QUEUELOG_COMPLETEAGENT' , Argb(100,240,240,0) ,
+                                    	If(EVENTO = 'EV_QUEUELOG_COMPLETECALLER' , Argb(100,255,240,0) ,
+                                            If(EVENTO = 'EV_CDR_Hangup' , rgb(255,0,0) ,
+                                            	If(EVENTO = 'EV_CDR_Dial' , rgb(255,255,200) ,
+                                                	If(EVENTO = 'EV_CDR_Dial' , rgb(255,255,200) ,rgb(179, 179, 204)
+                                                ))))))))))))))
+;
+  /*DEPURACIÓN SÍ/NO. 
+  Esta global afecta a las funciones (f_miTrace) */
+	  set  $DEBUG = 1;
+      set  $LOAD_FROM_QVD = 1;
+  
+
+/*MAPS usados  en las funcs*/
+  [m_users]: //con el id, el nombre del user de mysql
+  mapping LOAD
+      id_user,
+      lower(name)
+  FROM [lib://MAP_USERS (win-609osf5m1iu_sense.gestion)]
+  (txt, utf8, embedded labels, delimiter is ',', msq);
+  
+  [m_reverse_users]: //con cualquier nombre , el id del sistema.
+  mapping LOAD
+      lower(name) as name, 
+      id_user
+  FROM [lib://MAP_USERS (win-609osf5m1iu_sense.gestion)]
+  (txt, utf8, embedded labels, delimiter is ',', msq);
+  
+
+  LIB CONNECT TO 'DataWeb (win-609osf5m1iu_sense.gestion)';
+  [m_returns_actions]:
+  mapping
+  LOAD action,
+      texto;
+  SQL SELECT action,
+      texto
+  FROM web.`pccom_returns_actions`;
+
+
+  
+
+/*https://docs.google.com/spreadsheets/d/1yIHdf8BqluHpl3jL8YLJa6A3ygfeHwOIkEPy-aopOyA/edit#gid=0 , de aquí , mapeamos y obtenemos los usuarios , la utilizamos 
+para una y otra cosa, originalmente se cargaban hesk_users, pero es un error hacerlo de tablas existentes. */
+sub f_loadMappedUsers
+	CALL f_miTrace('CARGANDO LOS USUARIOS DEL SISTEMA');
+  //necesitamos group by así que hacemos una carga encadenada:
+  
+  [users]:
+  load  FirstValue(id_user) as id_user, 
+        FirstValue(user)  as user
+  group by id_user;
+  LOAD
+      id_user ,
+      name as user
+  FROM [lib://MAP_USERS (win-609osf5m1iu_sense.gestion)]
+  (txt, utf8, embedded labels, delimiter is ',', msq);
+  
+   OUTER JOIN LOAD
+      id_user,
+      upper(department) as department
+  FROM [lib://user_departments (win-609osf5m1iu_sense.gestion)]
+  (txt, utf8, embedded labels, delimiter is ',', msq);
+  
+
+end sub;
+
+
+/*los departamentos de los usuarios , https://docs.google.com/spreadsheets/d/1Yh9q6oUpt9a4S4wdoRJT3aH9QoOmY5AoiBFzX4qdJKg/export?format=csv */
+sub f_loadDepartments
+
+  [user_departments]:
+ OUTER JOIN LOAD
+      id_user,
+      upper(department) as department
+  FROM [lib://user_departments (win-609osf5m1iu_sense.gestion)]
+  (txt, utf8, embedded labels, delimiter is ',', msq);
+end sub;
+
+/*Para controlar el número de eventos que se producen cada media hora*/
+sub f_loadIntervalo30
+      [INTERVALO30]:
+      LOAD
+          id_intervalo,
+          hora, //formato hh:mm 
+          numero_intervalo30,
+          nombre_intervalo30
+      FROM [lib://intervalo30 (win-609osf5m1iu_sense.gestion)]
+      (txt, codepage is 1252, embedded labels, delimiter is ',', msq);
+end sub;
+
+sub f_loadMasterCalendar
+	[mastercalendar]:
+      LOAD
+          fecha,
+          fecha_int,
+          día_semana,
+          semana_anio,
+          mes,
+          diames,
+          trimestre,
+          order_diames,
+          anio,
+          texto_mes,
+          texto_dia_semana,
+          "fecha_dd/mm/aaaa",
+          fecha_larga,
+          fecha_dia_larga,
+          diames_largo,
+          trimestre_texto,
+          dias_especiales
+      FROM [lib://archivosQVD/MasterCalendar\MasterCalendar.QVD]
+      (qvd);
+end sub;
+
+
+/*FUNCS**************************************************************************************************************************************/
+
+/*PreCondición: s es una string
+  PostCondición: envía s a la salida de depuración de la carga de script haciendola más visible y pausando la carga durante 3 segundos .  
+
+*/
+sub f_miTrace (s)
+    if $DEBUG=1 then
+       TRACE $(s);
+       TRACE "/|\/|\/|\/|\/|\/|\/|\/|\/|\/|\/|\/|\/|\/|\/|\";
+    //  sleep(3000);
+    endif;
+end sub;
+
+
+/*Precondición: 
+	La tabla TEMP no hay de existir.
+  PostCondición:
+    CREA LA TABLA SKEL , a la cual se le hacen todos los OUTER JOINS ,
+    el motivo es que independientemente de las funciones que se ejecuten para la carga 
+    de scripts , esta tabla siempre existirá y nunca nos dará error. 
+  
+  TODO: https://community.qlikview.com/thread/7247 
+        Habría que incluirla en las f_loadOuterJoin_EV_[evento]
+        de tal forma que las funciones fueran autónomas , llamando a esta función si !exists(TEMP) 
+        permitiendo esto más libertad en la main y mayor modularidad.
+        
+        Aquí está lo que hace falta y un buen sitio donde aprender funciones para tablas.
+        https://help.qlik.com/es-ES/qlikview/12.0/Subsystems/Client/Content/Scripting/TableFunctions/table-functions.htm
+        
+        
+if not isnull(TableNumber('temptable')) then
+ drop table temptable;
+end if
+
+*/
+sub f_SingletonCreateInline_TEMP 
+   call f_miTrace('f_create_TEMP():\n');
+   
+   If Isnull(TableNumber('TEMP')) then //si la tabla TEMP no existe 
+      call f_miTrace('ATENCIÓN ::: La tabla TEMP no existe , así que la creamos');
+      [TEMP]:
+      LOAD * INLINE  [id, EVENTO, dt , id_user];
+   else
+   	 //callaicos
+     call f_miTrace('La tabla TEMP ya existe y no hace falta crearla');
+   endif
+end sub;
+
+/*Precondición: La tabla temp ha de existir , la llamada a  f_SingletonCreateInline_TEMP() ha de hacerse previamente.
+  Postcondición: Hace un OUTER JOIN en la tabla TEMP con su mismo formato del evento EV_TICKET_CREAR 
+*/
+sub f_loadOuterJoin_EV_TICKET_CREAR
+					call f_miTrace('f_loadOuterJoin_EV_TICKET_CREAR()');
+                    call f_SingletonCreateInline_TEMP ;
+                                            
+					LIB CONNECT TO 'DataWeb (win-609osf5m1iu_sense.gestion)';
+
+                    [TEMP]:
+                    outer join LOAD 
+                                  //campos comunes:
+                                    Hash128( 'EV_TICKET_CREAR'  , dt, rowno() ) as id,
+                                    'EV_TICKET_CREAR' as EVENTO,
+                                      [dt],
+                                      date(floor(dt)) as fecha,
+                                      Date(hour(dt) & ':' & minute(dt) , 'hh:mm') as hora,
+                                      ApplyMap('m_reverse_users',  lower([custom2]), [custom2]) as id_user, 
+                                     
+                                      
+                                  //campos propios:
+                                    [id] as EV_TICKET_CREAR_id_ticket, 
+                                    [trackid] as EV_TICKET_CREAR_trackid,
+                                    custom2 as EV_TICKET_CREAR_custom2, //creador del ticket 
+                                    custom3 as EV_TICKET_CREAR_custom3; //{default , o telefono (para cuando lo crean por ese motivo }} 
+                           //           FROM [lib://archivosQVD/helpdesk\raw_hesk_tickets.QVD] (qvd) WHERE custom2 <> ''; //UNICAMENTE LOS QUE TIENEN ESTE CAMPO SON LOS QUE SE HAN CREADO POR UN USER.
+                                      SQL SELECT id,
+                                          trackid,
+                                          name,
+                                          email,
+                                          category,
+                                          priority,
+                                          subject,
+                                          message,
+                                          dt,
+                                          lastchange,
+                                          ip,
+                                          status,
+                                          lastreplier,
+                                          archive,
+                                          attachments,
+                                          custom1,
+                                          custom2,
+                                          custom3,
+                                          custom4,
+                                          custom5,
+                                          `modificado_por`,
+                                          fecha,
+                                          `fecha_activo`,
+                                          `usuario_activo`
+                                      FROM helpdesk.`hesk_tickets` where custom2 <> '';
+end sub;
+
+
+
+/*PRECONDICIÓN : La tabla temp ha de existir , la llamada a  f_SingletonCreateInline_TEMP() ha de hacerse previamente.
+  POSTCONDICION: Hace un OUTER JOIN en la tabla TEMP con su mismo formato del evento EV_TICKET_CREAR
+*/
+sub f_loadOuterJoin_EV_TICKET_RESPONDER
+      call f_miTrace('f_loadOuterJoin_EV_TICKET_RESPONDER'); 
+      
+      call f_SingletonCreateInline_TEMP;
+      LIB CONNECT TO 'DataWeb (win-609osf5m1iu_sense.gestion)';
+      [TEMP]:
+      outer join LOAD 
+                    //campos comunes:
+                    Hash128( 'EV_TICKET_RESPONDER'  , dt, rowno() )   as id,
+                     'EV_TICKET_RESPONDER'					          AS EVENTO,
+                 													     dt,
+                 	 idUsuario 										  AS id_user,
+                     date(floor(dt))                                  as fecha,
+                     Date(hour(dt) & ':' & minute(dt) , 'hh:mm')      as hora,
+                                                                   
+                    //campos propios:
+                      id as EV_TICKET_RESPONDER_id,
+                      replyto as EV_TICKET_RESPONDER_replyto,
+                      name as EV_TICKET_RESPONDER_name,
+                      message as EV_TICKET_RESPONDER_message,
+                      attachments as EV_TICKET_RESPONDER_attachments,
+                      respuestaPccomponentes as EV_TICKET_RESPONDER_respuestaPccomponentes,
+                      leidoUsuario as EV_TICKET_RESPONDER_leidoUsuario;
+  //    FROM [lib://archivosQVD/helpdesk\raw_hesk_replys.QVD] (qvd);      				  
+      SQL SELECT id,
+          replyto,
+          name,
+          message,
+          dt,
+          attachments,
+          respuestaPccomponentes,
+          idUsuario,
+          leidoUsuario
+      FROM helpdesk.`hesk_replies`;
+end sub;
+
+
+/* La tabla original de la base de datos es la hesk_tickets_status_track , no se por que se le cambia el nombre quizá para confundir un poco más con la hesk_tickets_track..
+Según la ingenería inversa de la consulta : 
+
+select id from hesk_tickets where hesk_tickets.trackid = 'XRNTBBN1R2' into @id_ticket;
+select * from hesk_tickets_status_track where id_ticket = @id_ticket;
+
+Parece ser que tenemos esto . 
+STATUS = 10 = LEER_TICKET 
+STATUS = 3  = CERRAR_TICKET
+STATUS = 1  = ABRIR_TICKET (si está previamente cerrado)
+STATUS = 0 MARCAR COMO NUEVO, ETC. 
+ATENCIÓN PODRÍAN ESTAR MAL , HACER PRUEBAS CON LA SQL DE ARRIBA.
+
+Como solo nos piden uno lo vamos a dejar así , pero de aquí se pueden sacar tantos eventos como "status" existan. 
+
+De la consulta select `status` from hesk_tickets_status_track group by hesk_tickets_status_track.`status`
+tenemos 0 , 1 , 2 , 3 , 7 , y 10 ... Si interesan investigar que son . 
+*/
+SUB f_loadOuterJoin_EV_TICKET_LEER
+    call f_miTrace('f_loadOuterJoin_EV_TICKET_LEER');     
+    
+    call f_SingletonCreateInline_TEMP;
+    [TEMP]:
+    outer join LOAD 
+    	//comunes:
+    	 Hash128( 'EV_TICKET_LEER'  , fecha_status_track, rowno() ) as id,
+         'EV_TICKET_LEER'  as EVENTO, 
+         fecha_status_track as dt , 
+         id_user, 
+         date(floor(fecha_status_track)) as fecha, 
+         Date(hour(fecha_status_track) & ':' & minute(fecha_status_track) , 'hh:mm')      as hora,
+         
+		//propios
+        id_ticket AS EV_TICKET_LEER_id_ticket,
+        id_prev_status AS EV_TICKET_LEER_id_prev_status
+    FROM [lib://archivosQVD/helpdesk\hesk_status_track.QVD] (qvd) WHERE status = 10;   
+END SUB
+
+
+
+SUB f_loadOuterJoin_EV_TICKET_MOVER
+    call f_miTrace('f_loadOuterJoin_EV_TICKET_MOVER');      
+    call f_SingletonCreateInline_TEMP;
+    [TEMP]:
+    outer join LOAD 
+    	//comunes:
+        Hash128( 'EV_TICKET_MOVER'  , fecha_track, rowno() ) as id,
+         'EV_TICKET_MOVER'  as EVENTO, 
+          fecha_track as dt,
+          id_user,
+          date(floor(fecha_track)) as fecha, 
+         Date(hour(fecha_track) & ':' & minute(fecha_track) , 'hh:mm')      as hora,
+         
+        
+        //propios
+        id_ticket_track as EV_TICKET_MOVER_id_ticket,
+        id_prev_categ as EV_TICKET_MOVER_id_prev_categ,
+        id_prev_user as EV_TICKET_MOVER_id_prev_user,
+        id_categ as EV_TICKET_MOVER_id_category
+    FROM [lib://archivosQVD/helpdesk\hesk_tickets_track.QVD]
+    (qvd);
+END SUB;
+
+/*¿Para que cortarnos? MATEMOS 14 PAJAROS DE UN TIRO ^^ ya que estamos, vamos a crear eventos dinámicamente si nos encontramos LOGS de eventos por el camino
+  como lo es la queue_log de Asterisk es tan facil como concatenar las strings EVENTO & '<event_en_el_log>'  WTF!! Hay que documentarse bien sobre estos 14 eventos
+  sobre todo por el tema de que los campos <data*> contienen diferente información según cada uno de los diferentes Eventos , como por ejemplo la duración de una llamada 
+  en un connect.*/
+sub f_loadOuterJoin_EV_QUEUELOG_allEvents 
+	call f_miTrace('f_loadOuterJoin_QUEUELOG_ALLEVENT');     
+    
+    call f_SingletonCreateInline_TEMP;
+    [TEMP]:
+    outer join LOAD 
+                  //campos comunes:
+                  Hash128( 'EV_QUEUELOG'  , "time", rowno() ) as id,
+                  'EV_QUEUELOG_'	& event        AS EVENTO,
+                  "time" 											  as dt,
+                  ApplyMap('m_reverse_users' , agent, agent) 				  as id_user,
+                  date(floor("time")) as fecha, 
+                  Date(hour("time") & ':' & minute("time") , 'hh:mm')      as hora,
+   
+                   
+                   //campos propios:
+					id as EV_QUEUELOG_id,
+                    callid as EV_QUEUELOG_callid,
+                    queuename as EV_QUEUELOG_queuename,
+                    agent as EV_QUEUELOG_agent,
+                    data1 as EV_QUEUELOG_data1,
+                    data2 as EV_QUEUELOG_data2,
+                    data3 as EV_QUEUELOG_data3,
+                    data4 as EV_QUEUELOG_data4,
+                    data5 as EV_QUEUELOG_data5;
+                //FROM [lib://archivosQVD/helpdesk\raw_queue_log.QVD] (qvd);
+                    LIB CONNECT TO 'Samanta (win-609osf5m1iu_sense.gestion)';
+                    SQL SELECT id,
+                        `time`,
+                        callid,
+                        queuename,
+                        agent,
+                        event,
+                        data1,
+                        data2,
+                        data3,
+                        data4,
+                        data5
+                    FROM asterisk.`queue_log`;// WHERE event in ('CONNECT' , 'PAUSE' , 'UNPAUSE');
+end sub;
+
+
+
+sub f_loadOuterJoin_EV_CDR_allEvents
+	call f_miTrace('f_loadOuterJoin_EV_CDR_allEvents');     
+    
+    call f_SingletonCreateInline_TEMP;
+    [TEMP]:
+    outer join LOAD
+    			//campos comunes:
+                Hash128( 'EV_CDR'  , calldate, rowno() ) as id,
+                'EV_CDR_' & lastapp as EVENTO,
+                 calldate AS dt, /*TODO: EL FORMANO NO COINCIDE */
+                 date(floor(calldate)) as fecha,
+                 Date(hour(calldate) & ':' & minute(calldate) , 'hh:mm')      as hora,
+                 ApplyMap('m_reverse_users' , src) as id_user,
+                 
+                 
+                 //campos propios:
+                 
+                id as EV_CDR_id,          
+                clid as EV_CDR_clid,
+                src as EV_CDR_src,
+                dst as EV_CDR_dst,
+                dcontext as EV_CDR_dcontext,
+                lastdata as EV_CDR_lastdata,
+                duration as EV_CDR_duration,
+                billsec as EV_CDR_billsec,
+                disposition as EV_CDR_disposition,
+                channel as EV_CDR_channel,
+                dstchannel as EV_CDR_dstchannel,
+                amaflags as EV_CDR_amaflags,
+                accountcode as EV_CDR_accountcode,
+                uniqueid as EV_CDR_uniqueid,
+                userfield as EV_CDR_userfield,
+                answer as EV_CDR_answer,
+                "end" as EV_CDR_end;
+                
+            //FROM [lib://archivosQVD/helpdesk\raw_cdr.QVD] (qvd);
+            LIB CONNECT TO 'Samanta (win-609osf5m1iu_sense.gestion)';
+            SQL SELECT id,
+                calldate,
+                clid,
+                src,
+                dst,
+                dcontext,
+                lastapp,
+                lastdata,
+                duration,
+                billsec,
+                disposition,
+                channel,
+                dstchannel,
+                amaflags,
+                accountcode,
+                uniqueid,
+                userfield,
+                answer,
+                `end`
+            FROM asterisk.cdr WHERE lastapp <> '' and lastapp in ('Dial') ; //importante , si no entran eventos vacios 
+
+
+end sub;
+
+sub f_loadOuterJoin_EV_RETURN_allEvents 
+ 	call f_miTrace('f_loadOuterJoin_EV_RETURN_allEvents: CON CONEXIÓN A MYSQL ');
+
+	LIB CONNECT TO 'DataWeb (win-609osf5m1iu_sense.gestion)';
+
+    call f_SingletonCreateInline_TEMP;
+    
+    [TEMP]:
+    outer join LOAD
+    			//campos comunes:
+            Hash128( 'EV_CDR'  , dt, rowno() ) as id,
+            'EV_RETURN_' & ApplyMap('m_returns_actions',  position)  AS EVENTO,
+           dt,
+           MakeDate(year(dt), Month(dt), day(dt)) as fecha,
+           Date(hour(dt) & ':' & minute(dt), 'hh:mm') as hora,
+           ApplyMap('m_reverse_users' , lower(user), lower(user) ) as id_user, 
+          
+           	//campos propios: 
+            obs_log_ID as EV_RETURN_obs_log_ID, 
+            position as EV_RETURN_position, 
+            returnId as EV_RETURN_returnId,
+            TEXTO as EV_RETURN_TEXTO, 
+            TIPOID AS EV_RETURN_TIPOID,
+           SUBTIPOID AS EV_RETURN_SUBTIPOID,
+           INFORMACION AS EV_RETURN_INFORMACION,
+           STATUSID AS EV_RETURN_STATUSID
+     
+      ;
+      SQL 
+      (
+           SELECT
+          `pccom_returns_internal_obs`.`obsId` AS "obs_log_ID",
+          `pccom_returns_internal_obs`.`returnId`,
+          `pccom_returns_internal_obs`.`position`,
+          `pccom_returns_internal_obs`.`dt`,
+          `pccom_returns_internal_obs`.`text` AS "TEXTO",
+          `pccom_returns_internal_obs`.`user`,
+          NULL AS "TIPOID",
+          NULL AS "SUBTIPOID",
+          NULL AS "INFORMACION",
+          NULL AS "STATUSID"
+          FROM
+          `web`.`pccom_returns_internal_obs`
+      )
+      UNION ALL
+      (
+          SELECT
+          `pccom_returns_log`.`logId` "obs_log_ID",
+          `pccom_returns_log`.`returnId`,
+          `pccom_returns_log`.`position`,
+          `pccom_returns_log`.`dt`,
+          `pccom_returns_log`.`actionText` AS "TEXTO",
+          `pccom_returns_log`.`user`,
+          `pccom_returns_log`.`typeId` AS "TIPOID",
+          `pccom_returns_log`.`subtypeId` AS "SUBTIPOID",
+          `pccom_returns_log`.`info` AS "INFORMACION",
+          `pccom_returns_log`.`idStatus` AS "STATUSID"
+          FROM
+          `web`.`pccom_returns_log`
+      ); 
+end sub;
+
+
+sub f_loadOuterJoin_EV_ARTICULO_CREAR
+
+	call f_miTrace('f_loadOuterJoin_EV_ARTICULO_CREAR');     
+    call f_SingletonCreateInline_TEMP;
+    [TEMP]:
+    outer join LOAD
+    			//campos comunes:
+                Hash128( 'EV_ARTICULO_CREAR'  , fecha, rowno() ) as id,
+                'EV_ARTICULO_CREAR' as EVENTO,
+                 date#(fecha) AS dt, 
+                 fecha,
+                 '09:00' as hora,
+                 ApplyMap('m_reverse_users' , lower(creado)) as id_user,
+                 id_articulo as EV_ARTICULO_CREAR_id_articulo;
+              SQL 
+              SELECT creado, fecha, id_articulo
+              from web.articulos;
+end sub;
+
+
+sub f_loadOuterJoin_EV_ARTICULO_MODIFICAR
+
+	call f_miTrace('f_loadOuterJoin_EV_ARTICULO_MODIFICAR');     
+    call f_SingletonCreateInline_TEMP;
+    [TEMP]:
+    outer join LOAD
+    			//campos comunes:
+                Hash128( 'EV_ARTICULO_MODIFICAR'  , fecha, rowno() ) as id,
+                'EV_ARTICULO_MODIFICAR' as EVENTO,
+                 date#(fecha) AS dt, 
+                 fecha,
+                 '09:00' as hora,
+                 ApplyMap('m_reverse_users' , lower(modificado)) as id_user,
+                 id_articulo as EV_ARTICULO_MODIFICAR_id_articulo;
+              SQL 
+              SELECT modificado, fecha_modificado as fecha, id_articulo
+              from web.articulos;
+end sub;
+
+
+
+SUB f_loadOuterJoin_EV_RSS
+    call f_miTrace('f_loadOuterJoin_EV_RSS'); 
+    call f_SingletonCreateInline_TEMP;
+    [TEMP]:
+    outer join LOAD
+        Hash128( rowno(), 'EV_RSS')  as id,
+        upper('EV_RSS_' & "Tipo (FPb/FPv/TPb/TPv)") AS EVENTO,
+        "Hora Consulta (hh:mm)" as hora,
+      DATE#("Fecha Respuesta (dd/mm/aaaa)"&'-'&"Hora Consulta (hh:mm)", 'DD/MM/YYYY-hh:mm') as dt, 
+      
+      "Fecha Respuesta (dd/mm/aaaa)"&'-'&"Hora Consulta (hh:mm)" as concatenacion_hora_borrame, 
+        date("Fecha Respuesta (dd/mm/aaaa)") as fecha,
+        ApplyMap('m_reverse_users',   lower(Agente), lower(Agente) ) as id_user, 
+        
+        upper("Tipo de consulta (Técnica/Pedido/queja/agradecimiento/etc...)") as EV_RSS_tipo_consulta,
+        "Anotación/Comentario (No obligatorio)" as EV_RSS_anotacion,
+        "Tiempo respuesta" as EV_RSS_tiempo_respuesta
+    FROM [lib://CONTROL_REDES_NUEVO (win-609osf5m1iu_sense.gestion)]
+    (txt, utf8, embedded labels, delimiter is ',', msq);
+    
+
+
+END SUB
+
+
+

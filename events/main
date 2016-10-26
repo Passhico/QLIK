@@ -1,0 +1,53 @@
+/*Todos los EVENTOS tienen un id_user y con estas tablas se define identidad y departamento*/
+ call f_loadMappedUsers; //usuarios y departamentos (para configurar editar excels*/
+
+ /*Calendarios*/
+ call f_loadMasterCalendar; 
+ call f_loadIntervalo30; 
+ 
+
+ /*Lets the ball roll (A.S Tanembaum) , Ahora la Tabla maestra*/
+ call f_SingletonCreateInline_TEMP; //opcional, se queda ahi x legibilidad histórica, las funciones la crean si no existe.
+    
+    /*Catalogación*/
+    call f_loadOuterJoin_EV_ARTICULO_CREAR;
+	call f_loadOuterJoin_EV_ARTICULO_MODIFICAR;
+     
+    /*hesk*/
+     call f_loadOuterJoin_EV_TICKET_CREAR;
+     call f_loadOuterJoin_EV_TICKET_RESPONDER;
+     call f_loadOuterJoin_EV_TICKET_LEER;
+     call f_loadOuterJoin_EV_TICKET_MOVER;
+    /*centralita*/
+    call f_loadOuterJoin_EV_QUEUELOG_allEvents; //14 eventos.
+   call f_loadOuterJoin_EV_CDR_allEvents; //15 eventos  
+   call f_loadOuterJoin_EV_RETURN_allEvents; //algunos más.
+    
+	/*RRSS*/
+    call f_loadOuterJoin_EV_RSS;
+    
+
+/*MASTER'S KEY: mezclamos todo bien y dejamos reposar*/
+[EVENTS]:
+NoConcatenate
+LOAD * Resident TEMP 
+ORDER BY  dt ;
+
+DROP TABLE TEMP;
+
+//BORRAME BORRAME BORRAME
+//BORRAME BORRAME BORRAME
+//BORRAME BORRAME BORRAME
+//BORRAME BORRAME BORRAME
+//BORRAME BORRAME BORRAME
+//ESTO ELIMINA CUALQUIER TABLA DE LA APP , ES ÚNICAMENTE PARA HACER LAS COPIAS DE SEGURIDAD, COMENTAR PARA PRODUCCCIÓN . 
+
+for i = 0 to 250
+          LET d = TableName(i);
+          if isnull(d) then
+                    i = 250
+          end if
+          if d <> null() then
+         drop $(d);
+          end if
+next
